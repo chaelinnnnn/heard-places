@@ -51,6 +51,11 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .pin.done circle.ring{opacity:1}
 .pin:hover circle.dot,.pin:focus-visible circle.dot{r:17}
 .pin.playing circle.ring{opacity:1;stroke:var(--live);animation:pulse 1.6s ease-out infinite}
+.pin.taken circle.dot{fill:var(--line)}
+.pin.taken text{fill:var(--muted)}
+.taken-note{border:1px dashed var(--ink);background:var(--soft);padding:16px;display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.taken-note b{font-size:16px}
+.taken-note p{margin:0;font-size:13px;color:var(--muted);line-height:1.5}
 @keyframes pulse{from{r:18;opacity:1}to{r:34;opacity:0}}
 @media (prefers-reduced-motion:reduce){.pin.playing circle.ring{animation:none;r:22}}
 
@@ -186,12 +191,13 @@ textarea:disabled{background:var(--soft);color:var(--muted)}
           <button class="tool" id="undo">Undo</button>
           <button class="tool" id="clear">Clear all</button>
         </div>
-        <label class="field" for="note">Anything to add? (optional)
+        <label class="field" for="note" id="noteField">Anything to add? (optional)
           <textarea id="note" placeholder="e.g. It felt like someone just walked out and shut the door"></textarea>
         </label>
-        <div class="sec" id="othersWrap" hidden>
-          <h4>What others drew here</h4>
-          <div class="thumbs" id="others"></div>
+        <div class="taken-note" id="takenNote" hidden>
+          <b id="takenTitle">Someone has already drawn this place.</b>
+          <p id="takenTxt">Each place can be drawn by only one person. You can still listen, see their drawing, and guess where it was.</p>
+          <button class="btn primary" id="toGuess">See it in Guess</button>
         </div>
       </div>
 
@@ -296,7 +302,7 @@ const pins=[...document.querySelectorAll('.pin')];
 
 /* ---------- state ---------- */
 // Google Apps Script web app URL that stores responses in the Google Sheet. Empty = save on this device only.
-const ENDPOINT='https://script.google.com/macros/s/AKfycbwEUz4cRjshjlUj-NkgmzSnm3q9UQihSdZKFjeMb0AqCyIL2JEBQbcyKbIpiNYcEJP53Q/exec';
+const ENDPOINT='https://script.google.com/macros/s/AKfycbz4LIUhUcMeqPOo-rCwQyzIDzCVwgmHRZuHgRIz01r4fO61tH8UfiriEKQTsXhwqcfrqg/exec';
 const db=/^https:\/\/script\.google\.com\//.test(ENDPOINT);
 const uid=null;
 const canEdit=location.hash==='#results';   // open the page with #results at the end to see every response
@@ -307,6 +313,16 @@ let localId=store.get('hp_id');if(!localId){localId='local-'+Math.random().toStr
 const work=Object.assign({},store.get('hp_work')||{});     // i -> {strokes, note, revealed}
 const guesses=Object.assign({},store.get('hp_guess')||{}); // i -> {text, revealed}
 let allDrawings=[],allGuesses=[];
+// a place is closed for drawing once anyone else has started drawing it
+const taken=i=>allDrawings.some(d=>d.point===i+1&&d.uid!==me()&&d.strokes&&d.strokes.length)
+  &&!allDrawings.some(d=>d.point===i+1&&d.uid===me());
+// each person draws only one place: the one they started first
+function myPoint(){
+  const s=allDrawings.find(d=>d.uid===me()&&d.strokes&&d.strokes.length);if(s)return s.point-1;
+  for(let i=0;i<9;i++)if(work[i]&&work[i].strokes&&work[i].strokes.length)return i;
+  return -1;
+}
+const notMine=i=>{const m=myPoint();return m>=0&&m!==i};
 let cur=-1;
 const me=()=>uid||localId;
 const key=i=>`${me()}_p${i+1}`;
@@ -315,8 +331,13 @@ function refreshPins(){
   let n=0;
   pins.forEach((g,i)=>{
     const d=mode==='draw'?!!(work[i]&&work[i].revealed):!!(guesses[i]&&guesses[i].revealed);
-    g.classList.toggle('done',d);if(d)n++});
-  $('#tally').textContent=mode==='draw'?`${n} / 9 drawn`:`${n} / 9 guessed`;
+    g.classList.toggle('done',d);if(d)n++;
+    g.classList.toggle('taken',mode==='draw'&&(taken(i)||notMine(i))&&!d)});
+  const m=myPoint();
+  const open=[...Array(9).keys()].filter(i=>!taken(i)&&!(work[i]&&work[i].revealed)).length;
+  $('#tally').textContent=mode==='draw'
+    ?(m>=0?`Your place: ${m+1}`:`${open} of 9 places still open`)
+    :`${n} / 9 guessed`;
   $('#lede').textContent=mode==='draw'
     ?'Tap a number, listen, and draw what you imagine is happening there.'
     :'Tap a number, listen, look at what others drew, and guess the place.';
@@ -384,8 +405,14 @@ function save(i){
   while(JSON.stringify(strokes).length>220000) // thin very long drawings so they fit the sheet
     strokes=strokes.map(s=>({...s,p:s.p.filter((_,k)=>(k>>1)%2===0||k>=s.p.length-2)}));
   const body={type:'drawing',key:key(i),uid:me(),point:i+1,note:w.note||'',revealed:!!w.revealed,strokes};
-  chain=chain.then(()=>post(body))
-    .then(()=>{if(cur===i)say('Saved ✓ '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),true)})
+  chain=chain.then(()=>fetch(ENDPOINT,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)}).then(r=>r.json()))
+    .then(j=>{
+      if(j.taken||j.already){ // someone else claimed this place first, or this person already has a place
+        work[i]={strokes:[],note:'',revealed:false};store.set('hp_work',work);
+        load(true).then(()=>{refreshPins();if(cur===i&&mode==='draw')renderDraw()});return}
+      if(!j.ok)throw new Error(j.error);
+      if(!allDrawings.some(d=>d.point===i+1&&d.uid===me()))allDrawings.push({point:i+1,uid:me(),strokes:body.strokes,note:body.note,revealed:body.revealed});
+      if(cur===i)say('Saved ✓ '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),true)})
     .catch(()=>{if(cur===i)say('Could not reach the server. Saved on this device only.')});
   return chain;
 }
@@ -427,13 +454,24 @@ function openPoint(i){
 function renderDraw(){
   const i=cur;work[i]=work[i]||{strokes:[],note:'',revealed:false};const w=work[i];
   $('#drawBody').hidden=false;$('#guessBody').hidden=true;
+  const closed=taken(i)||notMine(i);
+  $('#takenNote').hidden=!closed;
+  if(notMine(i)&&!taken(i)){
+    $('#takenTitle').textContent=`You already drew place ${myPoint()+1}.`;
+    $('#takenTxt').textContent='Everyone draws just one place. You can still listen here and guess where it was.';
+  }else{
+    $('#takenTitle').textContent='Someone has already drawn this place.';
+    $('#takenTxt').textContent='Each place can be drawn by only one person. You can still listen, see their drawing, and guess where it was.';
+  }
+  ['#wrap','#drawbar','#noteField','#drawAnswer'].forEach(s=>{if(closed)$(s).hidden=true});
+  $('#wrap').hidden=closed;$('#noteField').hidden=closed;
+  if(closed){$('#sheetQ').textContent=notMine(i)&&!taken(i)?'One place per person':'This place is taken';$('#sheetSub').textContent='Only one drawing per place, one place per person.';
+    $('#done').hidden=true;say('');return}
   $('#sheetQ').textContent=w.revealed?'Here is where it was':'What is happening here?';
   $('#sheetSub').textContent=w.revealed?'Your drawing next to the real place.':'Listen, then draw what you imagine.';
   $('#note').value=w.note||'';$('#note').disabled=!!w.revealed;
   $('#drawbar').hidden=!!w.revealed;$('#wrap').classList.toggle('locked',!!w.revealed);
   $('#drawAnswer').hidden=!w.revealed;$('#drawAnswerTxt').textContent=ANSWERS[i];
-  $('#othersWrap').hidden=!w.revealed;
-  if(w.revealed)fillThumbs($('#others'),othersFor(i),'No one else has drawn this place yet.');
   $('#done').hidden=!!w.revealed;$('#done').textContent="I'm done, show the place";$('#done').classList.remove('armed');doneArmed=false;
   say(w.revealed?'Saved':db?'Saves automatically':'Saves on this device',!!w.revealed);
   redraw();
@@ -444,7 +482,7 @@ function renderGuess(){
   $('#sheetQ').textContent='Where was this recorded?';
   $('#sheetSub').textContent='Listen and look at the drawings, then make a guess.';
   fillThumbs($('#gThumbs'),allDrawings.filter(d=>d.point===i+1&&d.strokes&&d.strokes.length),
-    db?'No drawings for this place yet. Guess from the sound alone.':'Drawings from other people show up here when the map is shared.');
+    db?'No one has drawn this place yet. Guess from the sound alone.':'Drawings show up here when the map is shared.');
   $('#guess').value=g.text||'';
   showGuessAnswer(g.revealed);
   say(db?'Your guess saves automatically':'Saves on this device');
@@ -469,10 +507,11 @@ $('#done').addEventListener('click',()=>{
   doneArmed=false;clearTimeout(saveT);
   work[cur].revealed=true;save(cur);renderDraw();refreshPins();
 });
+$('#toGuess').addEventListener('click',()=>{const i=cur;setMode('guess');openPoint(i)});
 function closeSheet(){stopSound();$('#sheet').hidden=true;cur=-1;pins.forEach(g=>g.classList.remove('active'))}
 $('#close').addEventListener('click',closeSheet);
 $('#next').addEventListener('click',()=>{
-  const isDone=k=>mode==='draw'?!!(work[k]&&work[k].revealed):!!(guesses[k]&&guesses[k].revealed);
+  const isDone=k=>mode==='draw'?(!!(work[k]&&work[k].revealed)||taken(k)||notMine(k)):!!(guesses[k]&&guesses[k].revealed);
   const order=[...Array(9).keys()].map(k=>(cur+1+k)%9);
   openPoint(order.find(k=>!isDone(k))??(cur+1)%9)});
 
@@ -534,14 +573,17 @@ $('#closeResults').addEventListener('click',()=>{$('#results').hidden=true});
 /* ---------- loading everyone's responses ---------- */
 refreshPins();
 let loading=false;
-async function load(){
-  if(!db||loading||document.hidden)return;loading=true;
+async function load(force){
+  if(!db||(loading&&!force)||(document.hidden&&!force))return;loading=true;
   try{
     const r=await fetch(ENDPOINT+(canEdit?'?all=1':''));const j=await r.json();
+    const wasTaken=cur>=0&&taken(cur);
     allDrawings=(j.drawings||[]).filter(d=>d&&d.point);
     if(j.guesses)allGuesses=j.guesses;
-    if(cur>=0&&!drawing){if(mode==='guess')fillThumbs($('#gThumbs'),allDrawings.filter(d=>d.point===cur+1&&d.strokes&&d.strokes.length),'No drawings for this place yet. Guess from the sound alone.');
-      else if(work[cur]&&work[cur].revealed)fillThumbs($('#others'),othersFor(cur),'No one else has drawn this place yet.')}
+    refreshPins();
+    if(cur>=0&&!drawing){
+      if(mode==='guess')fillThumbs($('#gThumbs'),allDrawings.filter(d=>d.point===cur+1&&d.strokes&&d.strokes.length),'No one has drawn this place yet. Guess from the sound alone.');
+      else if(taken(cur)!==wasTaken)renderDraw()}
     if(!$('#results').hidden)renderResults();
   }catch(e){}
   loading=false;
