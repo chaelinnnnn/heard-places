@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -308,7 +309,7 @@ const uid=null;
 const canEdit=location.hash==='#results';   // open the page with #results at the end to see every response
 const who='';                 // responses stay anonymous; people are told apart by id
 let started=!!store.get('hp_started');
-let mode=store.get('hp_mode')||'draw';
+let mode='draw';  // every visit opens in Draw
 let localId=store.get('hp_id');if(!localId){localId='local-'+Math.random().toString(36).slice(2,10);store.set('hp_id',localId)}
 const work=Object.assign({},store.get('hp_work')||{});     // i -> {strokes, note, revealed}
 const guesses=Object.assign({},store.get('hp_guess')||{}); // i -> {text, revealed}
@@ -343,7 +344,7 @@ function refreshPins(){
     :'Tap a number, listen, look at what others drew, and guess the place.';
 }
 function setMode(m){
-  mode=m;store.set('hp_mode',m);
+  mode=m;
   $('#mDraw').setAttribute('aria-pressed',m==='draw');$('#mGuess').setAttribute('aria-pressed',m==='guess');
   closeSheet();refreshPins();
 }
