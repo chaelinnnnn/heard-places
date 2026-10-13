@@ -1,0 +1,559 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>Heard Places</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;700&family=IBM+Plex+Sans+KR:wght@400;500;700&display=swap">
+<style>
+/* Layout: one quiet grey map that fills the screen; a sheet slides over it to listen, draw, or guess. Color only in the edge band. */
+:root{
+  --ground:#eceeef; --block:#f7f8f8; --road:#ffffff; --water:#c9cdd1; --park:#e2e5e3;
+  --ink:#141617; --muted:#6c7174; --line:#d5d9db; --sheet:#ffffff; --paper:#ffffff; --soft:#f3f4f5;
+  --band-a:#f2a7d0; --band-b:#8cc8f0; --band-c:#3f7a4c; --live:#e2532d;
+  --sans:"IBM Plex Sans","IBM Plex Sans KR","Apple SD Gothic Neo",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+/* deliberately light-only: the map always reads as a pale printed city map */
+:root,:root[data-theme="dark"]{color-scheme:light}
+html,body{height:100%}
+body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:15px;overflow:hidden}
+button{font:inherit;color:inherit;cursor:pointer}
+button:disabled{opacity:.4;cursor:not-allowed}
+:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+.app{position:relative;height:100%;display:grid;grid-template-columns:14px 1fr}
+.band{display:grid;grid-template-rows:2fr 3fr 1fr 4fr}
+.band i:nth-child(1){background:var(--band-a)} .band i:nth-child(2){background:var(--band-b)}
+.band i:nth-child(3){background:var(--band-c)} .band i:nth-child(4){background:var(--band-a)}
+.stage{position:relative;overflow:hidden}
+#map{position:absolute;inset:0;width:100%;height:100%}
+
+.top{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:16px;pointer-events:none}
+.top>*{pointer-events:auto}
+.title{background:var(--sheet);padding:12px 14px;max-width:22rem;border:1px solid var(--line)}
+.title h1{margin:0;font-size:17px;font-weight:700;letter-spacing:-.01em}
+.title p{margin:6px 0 0;color:var(--muted);font-size:13px;line-height:1.5}
+.tally{font-family:var(--mono);font-size:12px;margin-top:8px;font-variant-numeric:tabular-nums}
+.tools-top{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.chip{background:var(--sheet);border:1px solid var(--line);padding:7px 11px;font-size:13px}
+.chip:hover{border-color:var(--ink)}
+.seg{display:flex;border:1px solid var(--ink);background:var(--sheet)}
+.seg button{border:0;background:none;padding:7px 12px;font-size:13px}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--sheet)}
+
+.pin{cursor:pointer}
+.pin circle.dot{fill:var(--ink);transition:r .15s}
+.pin text{fill:var(--ground);font-family:var(--mono);font-size:13px;font-weight:600;pointer-events:none}
+.pin circle.ring{fill:none;stroke:var(--ink);stroke-width:1.5;opacity:0}
+.pin.done circle.ring{opacity:1}
+.pin:hover circle.dot,.pin:focus-visible circle.dot{r:17}
+.pin.playing circle.ring{opacity:1;stroke:var(--live);animation:pulse 1.6s ease-out infinite}
+@keyframes pulse{from{r:18;opacity:1}to{r:34;opacity:0}}
+@media (prefers-reduced-motion:reduce){.pin.playing circle.ring{animation:none;r:22}}
+
+/* sheet */
+.sheet{position:absolute;right:16px;top:16px;bottom:16px;width:min(560px,calc(100% - 32px));background:var(--sheet);border:1px solid var(--ink);display:flex;flex-direction:column;z-index:5}
+.sheet-head{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.num{width:34px;height:34px;border-radius:50%;background:var(--ink);color:var(--sheet);display:grid;place-items:center;font-family:var(--mono);font-weight:600;flex:none}
+.sheet-head .q{flex:1;min-width:0}
+.q b{display:block;font-size:15px}
+.q span{display:block;color:var(--muted);font-size:12px;margin-top:2px}
+.x{background:none;border:0;font-size:22px;line-height:1;padding:4px 8px}
+.player{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.play{background:var(--ink);color:var(--sheet);border:0;padding:9px 16px;font-weight:500;display:flex;gap:8px;align-items:center}
+.play[aria-pressed="true"]{background:var(--live)}
+.meter{flex:1;height:22px;display:flex;align-items:center;gap:2px;overflow:hidden}
+.meter i{flex:1;background:var(--line);height:20%;transition:height .08s}
+.sheet-body{flex:1;min-height:0;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:14px}
+.canvas-wrap{position:relative;width:100%;aspect-ratio:4/3;max-width:100%;background:var(--paper);border:1px solid var(--line);touch-action:none}
+.canvas-wrap canvas{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair}
+.canvas-wrap.locked canvas{cursor:default}
+.hint{position:absolute;left:12px;bottom:10px;color:#9aa0a3;font-size:12px;pointer-events:none}
+.drawbar{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.tool{background:var(--sheet);border:1px solid var(--line);padding:6px 10px;font-size:13px}
+.tool[aria-pressed="true"]{background:var(--ink);color:var(--sheet);border-color:var(--ink)}
+.drawbar .sp{flex:1}
+label.field{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted)}
+textarea,input.txt{font:inherit;color:var(--ink);background:var(--sheet);border:1px solid var(--line);padding:10px}
+textarea{min-height:64px;resize:vertical}
+textarea:disabled{background:var(--soft);color:var(--muted)}
+.foot{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);font-family:var(--mono);flex-wrap:wrap}
+.foot .ok{color:var(--band-c)}
+.foot .acts{display:flex;gap:8px;font-family:var(--sans)}
+.btn{background:none;border:1px solid var(--line);padding:7px 11px;font-size:13px}
+.btn.primary{background:var(--ink);color:var(--sheet);border-color:var(--ink)}
+.btn.armed{background:var(--live);border-color:var(--live);color:#fff}
+
+/* reveal */
+.answer{border:1px solid var(--ink);padding:14px;display:flex;flex-direction:column;gap:4px}
+.answer small{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.answer b{font-size:20px;text-wrap:balance}
+.answer p{margin:4px 0 0;font-size:13px;color:var(--muted);line-height:1.5}
+.reveal-btn{width:100%;border:1px dashed var(--ink);background:var(--soft);padding:14px;font-weight:500}
+.sec h4{margin:0 0 8px;font-size:12px;font-family:var(--mono);letter-spacing:.04em;text-transform:uppercase;color:var(--muted);font-weight:600}
+
+/* intro */
+.veil{position:absolute;inset:0;background:color-mix(in srgb,var(--ground) 70%,transparent);display:grid;place-items:center;z-index:10;padding:16px;overflow:auto}
+.card{background:var(--sheet);border:1px solid var(--ink);max-width:32rem;width:100%;padding:22px;display:flex;flex-direction:column;gap:14px}
+.card h2{margin:0;font-size:21px;text-wrap:balance}
+.card p{margin:0;line-height:1.6;font-size:14px}
+.card .sub{color:var(--muted);font-size:13px}
+.card input{font:inherit;color:var(--ink);background:var(--sheet);border:1px solid var(--ink);padding:10px}
+.modes{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mode{border:1px solid var(--ink);background:var(--sheet);padding:14px;text-align:left;display:flex;flex-direction:column;gap:6px}
+.mode b{font-size:15px}
+.mode span{font-size:13px;color:var(--muted);line-height:1.45}
+.mode:hover{background:var(--ink);color:var(--sheet)}
+.mode:hover span{color:var(--sheet)}
+@media (max-width:460px){.modes{grid-template-columns:1fr}}
+
+/* thumbs */
+.thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.thumb{border:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
+.thumb canvas{width:100%;aspect-ratio:4/3;background:var(--paper);display:block}
+.thumb div{padding:8px;font-size:12px;line-height:1.5;min-width:0;overflow-wrap:anywhere}
+.thumb b{font-weight:600}
+.empty{color:var(--muted);font-size:13px;margin:0}
+
+/* owner panel */
+.panel{position:absolute;inset:16px;background:var(--sheet);border:1px solid var(--ink);z-index:8;display:flex;flex-direction:column}
+.panel-head{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line);gap:12px}
+.panel-head h2{margin:0;font-size:16px}
+.panel-body{overflow:auto;padding:14px;display:flex;flex-direction:column;gap:26px}
+.row h3{margin:0 0 10px;font-size:14px;display:flex;gap:10px;align-items:center}
+.row h3 .num{width:26px;height:26px;font-size:12px}
+.row h3 em{font-style:normal;color:var(--muted);font-weight:400}
+.guesses{margin:10px 0 0;padding:0;list-style:none;display:flex;flex-wrap:wrap;gap:6px}
+.guesses li{border:1px solid var(--line);padding:4px 8px;font-size:12px}
+.guesses li b{font-weight:600}
+
+@media (max-width:640px){
+  .sheet{left:16px;right:16px;top:auto;bottom:0;height:88%;width:auto;border-bottom:0}
+  .title{max-width:15rem}
+  .title p{display:none}
+}
+</style>
+
+<div class="app">
+  <div class="band" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <div class="stage">
+    <svg id="map" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid slice" role="img" aria-label="A map with nine sound points"></svg>
+
+    <div class="top">
+      <div class="title">
+        <h1>Heard Places</h1>
+        <p id="lede">Tap a number, listen, and draw what you imagine is happening there.</p>
+        <div class="tally" id="tally">0 / 9 drawn</div>
+      </div>
+      <div class="tools-top">
+        <div class="seg" role="group" aria-label="Mode">
+          <button id="mDraw" aria-pressed="true">Draw</button>
+          <button id="mGuess" aria-pressed="false">Guess</button>
+        </div>
+        <button class="chip" id="btnResults" hidden>All responses</button>
+      </div>
+    </div>
+
+    <!-- draw sheet -->
+    <section class="sheet" id="sheet" hidden aria-labelledby="sheetQ">
+      <div class="sheet-head">
+        <div class="num" id="sheetNum">1</div>
+        <div class="q"><b id="sheetQ">What is happening here?</b><span id="sheetSub">Listen, then draw what you imagine.</span></div>
+        <button class="x" id="close" aria-label="Close">×</button>
+      </div>
+      <div class="player">
+        <button class="play" id="play" aria-pressed="false"><span id="playIcon">▶</span><span id="playTxt">Listen</span></button>
+        <div class="meter" id="meter" aria-hidden="true"></div>
+      </div>
+
+      <div class="sheet-body" id="drawBody">
+        <div class="answer" id="drawAnswer" hidden>
+          <small>This sound was recorded at</small>
+          <b id="drawAnswerTxt"></b>
+          <p>Your drawing is saved. Compare it with what you imagined.</p>
+        </div>
+        <div class="canvas-wrap" id="wrap">
+          <canvas id="cv" width="1000" height="750" aria-label="Drawing area"></canvas>
+          <span class="hint" id="hint">Draw what you can't see</span>
+        </div>
+        <div class="drawbar" id="drawbar">
+          <button class="tool" data-w="3" aria-pressed="true">Fine pen</button>
+          <button class="tool" data-w="9" aria-pressed="false">Thick pen</button>
+          <button class="tool" data-w="eraser" aria-pressed="false">Eraser</button>
+          <span class="sp"></span>
+          <button class="tool" id="undo">Undo</button>
+          <button class="tool" id="clear">Clear all</button>
+        </div>
+        <label class="field" for="note">Anything to add? (optional)
+          <textarea id="note" placeholder="e.g. It felt like someone just walked out and shut the door"></textarea>
+        </label>
+        <div class="sec" id="othersWrap" hidden>
+          <h4>What others drew here</h4>
+          <div class="thumbs" id="others"></div>
+        </div>
+      </div>
+
+      <div class="sheet-body" id="guessBody" hidden>
+        <div class="sec">
+          <h4>Drawings by people who heard this sound</h4>
+          <div class="thumbs" id="gThumbs"></div>
+        </div>
+        <label class="field" for="guess">Where do you think this was recorded?
+          <input class="txt" id="guess" maxlength="80" placeholder="Type your guess" autocomplete="off">
+        </label>
+        <button class="reveal-btn" id="revealGuess">Show the answer</button>
+        <div class="answer" id="guessAnswer" hidden>
+          <small>Recorded at</small>
+          <b id="guessAnswerTxt"></b>
+          <p id="guessYours"></p>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span id="status">Saves automatically</span>
+        <span class="acts">
+          <button class="btn primary" id="done" disabled>I'm done, show the place</button>
+          <button class="btn" id="next">Next →</button>
+        </span>
+      </div>
+    </section>
+
+    <!-- intro -->
+    <div class="veil" id="intro">
+      <form class="card" id="introForm">
+        <h2>A map you visit with your ears</h2>
+        <p>There are no photos or names on this map. Each of the nine points holds only a sound. Headphones help.</p>
+        <p class="sub">There are no right answers. Everything you draw or type saves automatically.</p>
+        <div class="modes">
+          <button class="mode" type="submit" value="draw"><b>Listen and draw</b><span>Hear a place and draw what is happening there. Then find out where it was.</span></button>
+          <button class="mode" type="submit" value="guess"><b>Look and guess</b><span>Hear a place, see what others drew, and guess where it was.</span></button>
+        </div>
+      </form>
+    </div>
+
+    <section class="panel" id="results" hidden>
+      <div class="panel-head"><h2>All responses <span id="rCount" class="empty"></span></h2><button class="x" id="closeResults" aria-label="Close">×</button></div>
+      <div class="panel-body" id="resultsBody"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+(()=>{
+const $=s=>document.querySelector(s);
+// all points sit inside the 270–730 square, which stays visible on wide and tall screens alike
+const POINTS=[
+ {x:610,y:320},{x:450,y:290},{x:330,y:370},{x:690,y:440},{x:540,y:500},
+ {x:300,y:520},{x:650,y:630},{x:420,y:690},{x:500,y:395}
+];
+// what each point actually is; shown only after drawing or on request
+const ANSWERS=[
+ 'A plastic bag dragged by the wind',
+ 'A fan blowing',
+ 'A laundry room',
+ 'A playground',
+ 'A restaurant',
+ 'An elevator',
+ 'A crowd at a concert',
+ 'A park',
+ 'A door closing, then an empty room'
+];
+// recordings published with the page; points without one use a placeholder soundscape
+const SOUND_FILES={0:'sounds/p1.mp3',1:'sounds/p2.mp3',2:'sounds/p3.mp3',3:'sounds/p4.mp3',4:'sounds/p5.mp3',5:'sounds/p6.mp3',6:'sounds/p7.mp3',7:'sounds/p8.mp3',8:'sounds/p9.mp3'};
+const store={get(k){try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}},set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}};
+
+/* ---------- map ---------- */
+const svg=$('#map'),NS='http://www.w3.org/2000/svg';
+function el(t,a,p=svg){const e=document.createElementNS(NS,t);for(const k in a)e.setAttribute(k,a[k]);p.appendChild(e);return e}
+(function drawMap(){
+  el('rect',{x:0,y:0,width:1000,height:1000,fill:'var(--ground)'});
+  let s=7;const r=()=>(s=(s*9301+49297)%233280)/233280;
+  const g=el('g',{});
+  for(let i=0;i<70;i++){const x=r()*1000,y=r()*1000,w=40+r()*90,h=30+r()*70;
+    el('rect',{x,y,width:w,height:h,fill:'var(--block)',transform:`rotate(${-28+r()*12} ${x} ${y})`},g)}
+  el('path',{d:'M120 300 q60 -40 120 -10 q40 60 -20 110 q-80 30 -110 -30z',fill:'var(--park)'});
+  el('path',{d:'M760 760 q90 -20 120 50 q-10 80 -100 70 q-60 -40 -20 -120z',fill:'var(--park)'});
+  const roads=el('g',{stroke:'var(--road)','stroke-linecap':'round',fill:'none'});
+  for(let i=0;i<14;i++){const y=-100+i*85;el('line',{x1:-50,y1:y,x2:1050,y2:y+420,'stroke-width':i%4?5:12},roads)}
+  for(let i=0;i<12;i++){const x=-200+i*110;el('line',{x1:x,y1:1050,x2:x+520,y2:-50,'stroke-width':i%3?5:11},roads)}
+  el('path',{d:'M0 860 C300 760 520 820 1000 640',stroke:'var(--road)','stroke-width':16,fill:'none'});
+  el('path',{d:'M0 880 C300 780 520 840 1000 660',stroke:'var(--line)','stroke-width':2,'stroke-dasharray':'2 6',fill:'none'});
+  // one large venue footprint around point 7, cut into the grid like any other block
+  el('rect',{x:560,y:570,width:180,height:120,rx:34,fill:'var(--ground)',transform:'rotate(-22 650 630)'});
+  el('rect',{x:572,y:580,width:156,height:100,rx:28,fill:'var(--block)',transform:'rotate(-22 650 630)'});
+  POINTS.forEach((p,i)=>{
+    const a=el('g',{class:'pin',tabindex:0,role:'button','aria-label':`Point ${i+1}`,'data-i':i});
+    el('circle',{class:'ring',cx:p.x,cy:p.y,r:21},a);
+    el('circle',{class:'dot',cx:p.x,cy:p.y,r:14},a);
+    const t=el('text',{x:p.x,y:p.y+4.5,'text-anchor':'middle'},a);t.textContent=i+1;
+    a.addEventListener('click',()=>openPoint(i));
+    a.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();openPoint(i)}});
+  });
+})();
+const pins=[...document.querySelectorAll('.pin')];
+
+/* ---------- state ---------- */
+// Google Apps Script web app URL that stores responses in the Google Sheet. Empty = save on this device only.
+const ENDPOINT='https://script.google.com/macros/s/AKfycbwEUz4cRjshjlUj-NkgmzSnm3q9UQihSdZKFjeMb0AqCyIL2JEBQbcyKbIpiNYcEJP53Q/exec';
+const db=/^https:\/\/script\.google\.com\//.test(ENDPOINT);
+const uid=null;
+const canEdit=location.hash==='#results';   // open the page with #results at the end to see every response
+const who='';                 // responses stay anonymous; people are told apart by id
+let started=!!store.get('hp_started');
+let mode=store.get('hp_mode')||'draw';
+let localId=store.get('hp_id');if(!localId){localId='local-'+Math.random().toString(36).slice(2,10);store.set('hp_id',localId)}
+const work=Object.assign({},store.get('hp_work')||{});     // i -> {strokes, note, revealed}
+const guesses=Object.assign({},store.get('hp_guess')||{}); // i -> {text, revealed}
+let allDrawings=[],allGuesses=[];
+let cur=-1;
+const me=()=>uid||localId;
+const key=i=>`${me()}_p${i+1}`;
+
+function refreshPins(){
+  let n=0;
+  pins.forEach((g,i)=>{
+    const d=mode==='draw'?!!(work[i]&&work[i].revealed):!!(guesses[i]&&guesses[i].revealed);
+    g.classList.toggle('done',d);if(d)n++});
+  $('#tally').textContent=mode==='draw'?`${n} / 9 drawn`:`${n} / 9 guessed`;
+  $('#lede').textContent=mode==='draw'
+    ?'Tap a number, listen, and draw what you imagine is happening there.'
+    :'Tap a number, listen, look at what others drew, and guess the place.';
+}
+function setMode(m){
+  mode=m;store.set('hp_mode',m);
+  $('#mDraw').setAttribute('aria-pressed',m==='draw');$('#mGuess').setAttribute('aria-pressed',m==='guess');
+  closeSheet();refreshPins();
+}
+$('#mDraw').addEventListener('click',()=>setMode('draw'));
+$('#mGuess').addEventListener('click',()=>setMode('guess'));
+
+/* ---------- intro ---------- */
+if(started)$('#intro').hidden=true;
+$('#introForm').addEventListener('submit',e=>{e.preventDefault();
+  started=true;store.set('hp_started',true);$('#intro').hidden=true;setMode(e.submitter&&e.submitter.value==='guess'?'guess':'draw')});
+
+/* ---------- drawing ---------- */
+const cv=$('#cv'),ctx=cv.getContext('2d');
+let width=3,drawing=null;
+document.querySelectorAll('.tool[data-w]').forEach(b=>b.addEventListener('click',()=>{
+  document.querySelectorAll('.tool[data-w]').forEach(x=>x.setAttribute('aria-pressed',x===b));width=b.dataset.w}));
+function paint(c,strokes,W,H){
+  c.clearRect(0,0,W,H);const sx=W/1000,sy=H/750;
+  for(const s of strokes){
+    c.globalCompositeOperation=s.e?'destination-out':'source-over';
+    c.strokeStyle='#141617';c.lineWidth=(s.e?28:s.w)*sx;c.lineCap='round';c.lineJoin='round';
+    const p=s.p;c.beginPath();c.moveTo(p[0]*sx,p[1]*sy);
+    if(p.length===2)c.lineTo(p[0]*sx+.1,p[1]*sy);
+    for(let k=2;k<p.length;k+=2)c.lineTo(p[k]*sx,p[k+1]*sy);
+    c.stroke();
+  }
+  c.globalCompositeOperation='source-over';
+}
+const locked=()=>cur<0||mode!=='draw'||!!work[cur].revealed;
+function redraw(){paint(ctx,work[cur].strokes,1000,750);$('#hint').hidden=work[cur].strokes.length>0||locked();
+  $('#done').disabled=!work[cur].strokes.length}
+const clamp=(v,m)=>Math.max(0,Math.min(m,v));
+function pos(e){const r=cv.getBoundingClientRect();return[clamp(Math.round((e.clientX-r.left)/r.width*1000),1000),clamp(Math.round((e.clientY-r.top)/r.height*750),750)]}
+cv.addEventListener('pointerdown',e=>{if(locked())return;cv.setPointerCapture(e.pointerId);
+  const p=pos(e);drawing=width==='eraser'?{e:1,p}:{w:+width,p};work[cur].strokes.push(drawing);redraw()});
+cv.addEventListener('pointermove',e=>{if(!drawing)return;const p=pos(e),q=drawing.p;
+  if(Math.abs(q[q.length-2]-p[0])+Math.abs(q[q.length-1]-p[1])<3)return;q.push(...p);redraw()});
+function end(){if(!drawing)return;drawing=null;queueSave()}
+cv.addEventListener('pointerup',end);cv.addEventListener('pointercancel',end);
+$('#undo').addEventListener('click',()=>{if(locked()||!work[cur].strokes.length)return;work[cur].strokes.pop();redraw();queueSave()});
+let clearArmed=false;
+$('#clear').addEventListener('click',e=>{if(locked())return;
+  if(!clearArmed){clearArmed=true;e.target.textContent='Clear everything?';setTimeout(()=>{clearArmed=false;e.target.textContent='Clear all'},2500);return}
+  clearArmed=false;e.target.textContent='Clear all';work[cur].strokes=[];redraw();queueSave()});
+$('#note').addEventListener('input',()=>{if(locked())return;work[cur].note=$('#note').value;queueSave()});
+
+/* ---------- saving ---------- */
+let saveT=null,chain=Promise.resolve();
+const status=$('#status');
+function say(t,ok){status.textContent=t;status.className=ok?'ok':''}
+function queueSave(){say('Saving…');clearTimeout(saveT);const i=cur;saveT=setTimeout(()=>save(i),700)}
+// text/plain keeps the request "simple", so the browser sends it to Apps Script without a preflight
+function post(body){return fetch(ENDPOINT,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(body)})
+  .then(r=>r.json()).then(j=>{if(!j.ok)throw new Error(j.error||'save failed');return j})}
+function save(i){
+  store.set('hp_work',work);
+  if(!db){say('Saved on this device',true);return Promise.resolve()}
+  const w=work[i];let strokes=w.strokes;
+  while(JSON.stringify(strokes).length>220000) // thin very long drawings so they fit the sheet
+    strokes=strokes.map(s=>({...s,p:s.p.filter((_,k)=>(k>>1)%2===0||k>=s.p.length-2)}));
+  const body={type:'drawing',key:key(i),uid:me(),point:i+1,note:w.note||'',revealed:!!w.revealed,strokes};
+  chain=chain.then(()=>post(body))
+    .then(()=>{if(cur===i)say('Saved ✓ '+new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}),true)})
+    .catch(()=>{if(cur===i)say('Could not reach the server. Saved on this device only.')});
+  return chain;
+}
+function saveGuess(i){
+  store.set('hp_guess',guesses);
+  if(!db)return;
+  const g=guesses[i];
+  chain=chain.then(()=>post({type:'guess',key:key(i),uid:me(),point:i+1,text:g.text||'',revealed:!!g.revealed})).catch(()=>{});
+}
+
+/* ---------- thumbnails ---------- */
+// anonymous labels: the same person keeps the same letter everywhere on the page
+const tags={};
+function tagFor(id){if(!(id in tags)){const n=Object.keys(tags).length;tags[id]='Listener '+(n<26?String.fromCharCode(65+n):n+1)}return tags[id]}
+function thumb(d){
+  const t=document.createElement('div');t.className='thumb';
+  const c=document.createElement('canvas');c.width=400;c.height=300;paint(c.getContext('2d'),d.strokes||[],400,300);
+  t.appendChild(c);
+  const cap=document.createElement('div');const b=document.createElement('b');b.textContent=d.uid===me()?'You':tagFor(d.uid);cap.appendChild(b);
+  if(d.note){cap.appendChild(document.createElement('br'));cap.appendChild(document.createTextNode(d.note))}
+  t.appendChild(cap);return t;
+}
+const othersFor=i=>allDrawings.filter(d=>d.point===i+1&&d.uid!==me()&&d.strokes&&d.strokes.length);
+function fillThumbs(box,list,emptyTxt){
+  box.textContent='';
+  if(!list.length){const p=document.createElement('p');p.className='empty';p.textContent=emptyTxt;box.appendChild(p);return}
+  list.forEach(d=>box.appendChild(thumb(d)));
+}
+
+/* ---------- sheet ---------- */
+function openPoint(i){
+  if(!started){$('#intro').hidden=false;return}
+  stopSound();cur=i;
+  $('#sheet').hidden=false;$('#sheetNum').textContent=i+1;
+  pins.forEach((g,k)=>g.classList.toggle('active',k===i));
+  if(mode==='draw')renderDraw();else renderGuess();
+  $('#play').focus();
+}
+function renderDraw(){
+  const i=cur;work[i]=work[i]||{strokes:[],note:'',revealed:false};const w=work[i];
+  $('#drawBody').hidden=false;$('#guessBody').hidden=true;
+  $('#sheetQ').textContent=w.revealed?'Here is where it was':'What is happening here?';
+  $('#sheetSub').textContent=w.revealed?'Your drawing next to the real place.':'Listen, then draw what you imagine.';
+  $('#note').value=w.note||'';$('#note').disabled=!!w.revealed;
+  $('#drawbar').hidden=!!w.revealed;$('#wrap').classList.toggle('locked',!!w.revealed);
+  $('#drawAnswer').hidden=!w.revealed;$('#drawAnswerTxt').textContent=ANSWERS[i];
+  $('#othersWrap').hidden=!w.revealed;
+  if(w.revealed)fillThumbs($('#others'),othersFor(i),'No one else has drawn this place yet.');
+  $('#done').hidden=!!w.revealed;$('#done').textContent="I'm done, show the place";$('#done').classList.remove('armed');doneArmed=false;
+  say(w.revealed?'Saved':db?'Saves automatically':'Saves on this device',!!w.revealed);
+  redraw();
+}
+function renderGuess(){
+  const i=cur;guesses[i]=guesses[i]||{text:'',revealed:false};const g=guesses[i];
+  $('#drawBody').hidden=true;$('#guessBody').hidden=false;$('#done').hidden=true;
+  $('#sheetQ').textContent='Where was this recorded?';
+  $('#sheetSub').textContent='Listen and look at the drawings, then make a guess.';
+  fillThumbs($('#gThumbs'),allDrawings.filter(d=>d.point===i+1&&d.strokes&&d.strokes.length),
+    db?'No drawings for this place yet. Guess from the sound alone.':'Drawings from other people show up here when the map is shared.');
+  $('#guess').value=g.text||'';
+  showGuessAnswer(g.revealed);
+  say(db?'Your guess saves automatically':'Saves on this device');
+}
+function showGuessAnswer(on){
+  const i=cur,g=guesses[i];
+  $('#revealGuess').hidden=on;$('#guessAnswer').hidden=!on;$('#guessAnswerTxt').textContent=ANSWERS[i];
+  $('#guessYours').textContent=g.text?`Your guess: ${g.text}`:'You looked without guessing.';
+}
+let guessT=null;
+$('#guess').addEventListener('input',()=>{if(cur<0)return;guesses[cur].text=$('#guess').value;
+  if(guesses[cur].revealed)$('#guessYours').textContent=`Your guess: ${guesses[cur].text}`;
+  clearTimeout(guessT);const i=cur;guessT=setTimeout(()=>{saveGuess(i);say('Guess saved ✓',true)},700)});
+$('#revealGuess').addEventListener('click',()=>{const i=cur;guesses[i].text=$('#guess').value.trim();guesses[i].revealed=true;
+  clearTimeout(guessT);saveGuess(i);showGuessAnswer(true);refreshPins()});
+
+let doneArmed=false;
+$('#done').addEventListener('click',()=>{
+  const b=$('#done');
+  if(!doneArmed){doneArmed=true;b.textContent="Reveal? You can't edit after";b.classList.add('armed');
+    setTimeout(()=>{if(doneArmed){doneArmed=false;b.textContent="I'm done, show the place";b.classList.remove('armed')}},4000);return}
+  doneArmed=false;clearTimeout(saveT);
+  work[cur].revealed=true;save(cur);renderDraw();refreshPins();
+});
+function closeSheet(){stopSound();$('#sheet').hidden=true;cur=-1;pins.forEach(g=>g.classList.remove('active'))}
+$('#close').addEventListener('click',closeSheet);
+$('#next').addEventListener('click',()=>{
+  const isDone=k=>mode==='draw'?!!(work[k]&&work[k].revealed):!!(guesses[k]&&guesses[k].revealed);
+  const order=[...Array(9).keys()].map(k=>(cur+1+k)%9);
+  openPoint(order.find(k=>!isDone(k))??(cur+1)%9)});
+
+/* ---------- sound ---------- */
+let ac=null,master=null,analyser=null,running=null,audioEl=null;
+const meter=$('#meter');for(let k=0;k<28;k++)meter.appendChild(document.createElement('i'));
+function ctxA(){if(!ac){ac=new (window.AudioContext||window.webkitAudioContext)();analyser=ac.createAnalyser();analyser.fftSize=64;analyser.connect(ac.destination)}return ac}
+function noise(type){const n=ac.sampleRate*3,b=ac.createBuffer(1,n,ac.sampleRate),d=b.getChannelData(0);let last=0;
+  for(let k=0;k<n;k++){const w=Math.random()*2-1;if(type==='brown'){last=(last+.02*w)/1.02;d[k]=last*3.5}else d[k]=w}
+  const s=ac.createBufferSource();s.buffer=b;s.loop=true;s.start();return s}
+function filt(src,type,f,q=1){const F=ac.createBiquadFilter();F.type=type;F.frequency.value=f;F.Q.value=q;src.connect(F);return F}
+function gainOf(node,v){const g=ac.createGain();g.gain.value=v;node.connect(g);g.connect(master);return g}
+const timers=[];
+const SYNTH=()=>{const g=gainOf(filt(noise('brown'),'lowpass',500),.6)};
+function startSound(i){
+  ctxA();if(ac.state==='suspended')ac.resume();
+  master=ac.createGain();master.gain.value=0;master.connect(analyser);master.gain.linearRampToValueAtTime(.9,ac.currentTime+.6);
+  if(SOUND_FILES[i]){audioEl=new Audio(SOUND_FILES[i]);audioEl.loop=true;
+    try{ac.createMediaElementSource(audioEl).connect(master)}catch(e){}
+    audioEl.play().catch(()=>say('The recording could not play. Try again.'))}
+  else SYNTH();
+  running=i;$('#play').setAttribute('aria-pressed','true');$('#playIcon').textContent='■';$('#playTxt').textContent='Stop';
+  pins.forEach((g,k)=>g.classList.toggle('playing',k===i));tick();
+}
+function stopSound(){
+  timers.splice(0).forEach(clearInterval);
+  if(audioEl){audioEl.pause();audioEl=null}
+  if(master){const m=master;m.gain.linearRampToValueAtTime(0,ac.currentTime+.2);setTimeout(()=>m.disconnect(),260);master=null}
+  running=null;$('#play').setAttribute('aria-pressed','false');$('#playIcon').textContent='▶';$('#playTxt').textContent='Listen';
+  pins.forEach(g=>g.classList.remove('playing'));
+}
+$('#play').addEventListener('click',()=>{running===cur?stopSound():(stopSound(),startSound(cur))});
+function tick(){if(running===null){meter.querySelectorAll('i').forEach(b=>b.style.height='20%');return}
+  const a=new Uint8Array(analyser.frequencyBinCount);analyser.getByteFrequencyData(a);
+  meter.querySelectorAll('i').forEach((b,k)=>b.style.height=Math.max(12,a[k]/2.55)+'%');requestAnimationFrame(tick)}
+
+/* ---------- owner: all responses ---------- */
+function renderResults(){
+  const body=$('#resultsBody');body.textContent='';
+  const people=new Set([...allDrawings,...allGuesses].map(d=>d.uid));
+  $('#rCount').textContent=`· ${people.size} people · ${allDrawings.length} drawings · ${allGuesses.length} guesses`;
+  for(let i=0;i<9;i++){
+    const row=document.createElement('div');row.className='row';
+    const h=document.createElement('h3');h.innerHTML=`<span class="num">${i+1}</span>`;
+    const t=document.createElement('span');t.textContent=ANSWERS[i];const em=document.createElement('em');em.textContent=' (answer)';t.appendChild(em);h.appendChild(t);
+    row.appendChild(h);
+    const grid=document.createElement('div');grid.className='thumbs';
+    fillThumbs(grid,allDrawings.filter(d=>d.point===i+1&&d.strokes&&d.strokes.length),'No drawings yet');row.appendChild(grid);
+    const gs=allGuesses.filter(g=>g.point===i+1&&g.text);
+    if(gs.length){const ul=document.createElement('ul');ul.className='guesses';
+      gs.forEach(g=>{const li=document.createElement('li');const b=document.createElement('b');b.textContent=(g.uid===me()?'You':tagFor(g.uid))+': ';li.append(b,document.createTextNode(g.text));ul.appendChild(li)});
+      row.appendChild(ul)}
+    body.appendChild(row);
+  }
+}
+$('#btnResults').addEventListener('click',()=>{$('#results').hidden=false;renderResults()});
+$('#closeResults').addEventListener('click',()=>{$('#results').hidden=true});
+
+/* ---------- loading everyone's responses ---------- */
+refreshPins();
+let loading=false;
+async function load(){
+  if(!db||loading||document.hidden)return;loading=true;
+  try{
+    const r=await fetch(ENDPOINT+(canEdit?'?all=1':''));const j=await r.json();
+    allDrawings=(j.drawings||[]).filter(d=>d&&d.point);
+    if(j.guesses)allGuesses=j.guesses;
+    if(cur>=0&&!drawing){if(mode==='guess')fillThumbs($('#gThumbs'),allDrawings.filter(d=>d.point===cur+1&&d.strokes&&d.strokes.length),'No drawings for this place yet. Guess from the sound alone.');
+      else if(work[cur]&&work[cur].revealed)fillThumbs($('#others'),othersFor(cur),'No one else has drawn this place yet.')}
+    if(!$('#results').hidden)renderResults();
+  }catch(e){}
+  loading=false;
+}
+if(canEdit)$('#btnResults').hidden=false;
+if(db){load();setInterval(load,20000);document.addEventListener('visibilitychange',load);
+  pins.forEach(p=>p.addEventListener('click',load));}
+})();
+</script>
+
+</body>
+</html>
