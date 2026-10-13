@@ -26,10 +26,8 @@ button{font:inherit;color:inherit;cursor:pointer}
 button:disabled{opacity:.4;cursor:not-allowed}
 :focus-visible{outline:2px solid var(--ink);outline-offset:2px}
 
-.app{position:relative;height:100%;display:grid;grid-template-columns:14px 1fr}
-.band{display:grid;grid-template-rows:2fr 3fr 1fr 4fr}
-.band i:nth-child(1){background:var(--band-a)} .band i:nth-child(2){background:var(--band-b)}
-.band i:nth-child(3){background:var(--band-c)} .band i:nth-child(4){background:var(--band-a)}
+.app{position:relative;height:100%}
+.stage{height:100%}
 .stage{position:relative;overflow:hidden}
 #map{position:absolute;inset:0;width:100%;height:100%}
 
@@ -140,7 +138,6 @@ textarea:disabled{background:var(--soft);color:var(--muted)}
 </style>
 
 <div class="app">
-  <div class="band" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
   <div class="stage">
     <svg id="map" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid slice" role="img" aria-label="A map with nine sound points"></svg>
 
